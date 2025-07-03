@@ -1,0 +1,136 @@
+#!/bin/bash
+
+# twin - Simple rsync wrapper for syncing directories to remote hosts
+# Usage: twin [options] ssh-remote-name [directory]
+# Options:
+#   -p    Pull back changes after push
+#   -e    Custom rsync flags (default: '-avu --progress')
+#   -h    Show help
+
+set -e
+
+# Default values
+RSYNC_FLAGS="-avu --progress"
+PULL_BACK=false
+SSH_REMOTE=""
+DIRECTORY=""
+
+# Function to display help
+show_help() {
+    cat << EOF
+twin - Simple rsync wrapper for syncing directories to remote hosts
+
+Usage: twin [options] ssh-remote-name [directory]
+
+Options:
+  -p          Pull back changes after push (bidirectional sync)
+  -e FLAGS    Custom rsync flags (default: '-avu --progress')
+  -h          Show this help message
+
+Examples:
+  twin myserver                    # Sync current directory to myserver
+  twin myserver /path/to/dir       # Sync specific directory to myserver
+  twin -p myserver                 # Push then pull back changes
+  twin -e "-av --delete" myserver  # Use custom rsync flags
+
+EOF
+    exit 0
+}
+
+# Parse command line options
+while getopts "pe:h" opt; do
+    case $opt in
+        p)
+            PULL_BACK=true
+            ;;
+        e)
+            RSYNC_FLAGS="$OPTARG"
+            ;;
+        h)
+            show_help
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            echo "Use -h for help" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Shift past the options
+shift $((OPTIND-1))
+
+# Check for required ssh-remote-name argument
+if [ $# -eq 0 ]; then
+    echo "Error: ssh-remote-name is required" >&2
+    echo "Use -h for help" >&2
+    exit 1
+fi
+
+SSH_REMOTE="$1"
+shift
+
+# Get directory (optional)
+if [ $# -gt 0 ]; then
+    DIRECTORY="$1"
+else
+    DIRECTORY="$(pwd)"
+fi
+
+# Validate directory exists
+if [ ! -d "$DIRECTORY" ]; then
+    echo "Error: Directory '$DIRECTORY' does not exist" >&2
+    exit 1
+fi
+
+# Get absolute path
+DIRECTORY="$(cd "$DIRECTORY" && pwd)"
+
+# Ensure directory ends with /
+if [[ ! "$DIRECTORY" =~ /$ ]]; then
+    DIRECTORY="${DIRECTORY}/"
+fi
+
+# Test SSH connection
+echo "Testing SSH connection to $SSH_REMOTE..."
+if ! ssh -o ConnectTimeout=5 "$SSH_REMOTE" exit 2>/dev/null; then
+    echo "Error: Cannot connect to SSH remote '$SSH_REMOTE'" >&2
+    echo "Make sure the remote is configured in your ~/.ssh/config" >&2
+    exit 1
+fi
+
+# Create remote directory if it doesn't exist
+# Remove trailing slash for directory creation
+REMOTE_DIR="${DIRECTORY%/}"
+echo "Ensuring remote directory exists: $REMOTE_DIR"
+if ! ssh "$SSH_REMOTE" "mkdir -p '$REMOTE_DIR'"; then
+    echo "Error: Failed to create remote directory '$REMOTE_DIR'" >&2
+    exit 1
+fi
+
+# Perform the sync (push)
+echo "Syncing $DIRECTORY to $SSH_REMOTE:$DIRECTORY"
+echo "Using rsync flags: $RSYNC_FLAGS"
+if ! rsync $RSYNC_FLAGS "$DIRECTORY" "$SSH_REMOTE:$DIRECTORY"; then
+    echo "Error: rsync push failed" >&2
+    exit 1
+fi
+
+# Pull back if requested
+if [ "$PULL_BACK" = true ]; then
+    echo ""
+    echo "Pulling back changes from $SSH_REMOTE:$DIRECTORY"
+    # Ensure local parent directory exists for pull-back
+    LOCAL_PARENT=$(dirname "$REMOTE_DIR")
+    if [ ! -d "$LOCAL_PARENT" ] && [ "$LOCAL_PARENT" != "/" ]; then
+        echo "Creating local parent directory: $LOCAL_PARENT"
+        mkdir -p "$LOCAL_PARENT"
+    fi
+    if ! rsync $RSYNC_FLAGS "$SSH_REMOTE:$DIRECTORY" "$DIRECTORY"; then
+        echo "Error: rsync pull failed" >&2
+        exit 1
+    fi
+fi
+
+echo ""
+echo "Sync completed successfully!"
