@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # test_integration.sh - Integration tests for twin tool using real rsync
-# This requires SSH access to remote-archer
+# This requires SSH access to a test remote
 
 set -e
 
@@ -11,8 +11,16 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
+# Load test configuration from .env only if TWIN_TEST_REMOTE is not already set
+if [ -z "$TWIN_TEST_REMOTE" ] && [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
+# Use environment variable or default
+TEST_REMOTE="${TWIN_TEST_REMOTE:-localhost}"
+
 echo -e "${YELLOW}=== Twin Integration Tests ===${NC}"
-echo "These tests require SSH access to remote-archer"
+echo "These tests require SSH access to $TEST_REMOTE"
 echo
 
 # Test setup
@@ -24,7 +32,7 @@ INSTALL_DIR="$TEST_DIR/bin"
 # Cleanup function
 cleanup() {
     rm -rf "$TEST_DIR"
-    ssh remote-archer "rm -rf $TEST_DIR" 2>/dev/null || true
+    ssh "$TEST_REMOTE" "rm -rf $TEST_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -38,10 +46,11 @@ echo "Installing twin for testing..."
 make install PREFIX="$INSTALL_DIR" > /dev/null
 
 # Test SSH access
-echo "Testing SSH access to remote-archer..."
-if ! ssh -o BatchMode=yes -o ConnectTimeout=5 remote-archer exit 2>/dev/null; then
-    echo -e "${RED}ERROR: Cannot SSH to remote-archer${NC}"
-    echo "Please ensure you have SSH access to remote-archer for testing"
+echo "Testing SSH access to $TEST_REMOTE..."
+if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$TEST_REMOTE" exit 2>/dev/null; then
+    echo -e "${RED}ERROR: Cannot SSH to $TEST_REMOTE${NC}"
+    echo "Please ensure you have SSH access to $TEST_REMOTE for testing"
+    echo "Configure the test remote in .env file (see .env.example)"
     exit 1
 fi
 
@@ -55,17 +64,17 @@ echo "file3 content" > "$LOCAL_DIR/subdir/file3.txt"
 # Test 1: Basic sync
 echo -e "\n${YELLOW}Test 1: Basic sync${NC}"
 cd "$LOCAL_DIR"
-if "$INSTALL_DIR/bin/twin" remote-archer; then
+if "$INSTALL_DIR/bin/twin" $TEST_REMOTE; then
     echo -e "${GREEN}✓ Sync command executed successfully${NC}"
     
     # Verify files on remote
-    if ssh remote-archer "test -f '$LOCAL_DIR/file1.txt'"; then
+    if ssh $TEST_REMOTE "test -f '$LOCAL_DIR/file1.txt'"; then
         echo -e "${GREEN}✓ file1.txt synced${NC}"
     else
         echo -e "${RED}✗ file1.txt not found on remote${NC}"
     fi
     
-    if ssh remote-archer "test -d '$LOCAL_DIR/subdir'"; then
+    if ssh $TEST_REMOTE "test -d '$LOCAL_DIR/subdir'"; then
         echo -e "${GREEN}✓ subdir synced${NC}"
     else
         echo -e "${RED}✗ subdir not found on remote${NC}"
@@ -80,10 +89,10 @@ SPECIFIC_DIR="$TEST_DIR/specific"
 mkdir -p "$SPECIFIC_DIR"
 echo "specific content" > "$SPECIFIC_DIR/specific.txt"
 
-if "$INSTALL_DIR/bin/twin" remote-archer "$SPECIFIC_DIR"; then
+if "$INSTALL_DIR/bin/twin" $TEST_REMOTE "$SPECIFIC_DIR"; then
     echo -e "${GREEN}✓ Specific directory sync executed${NC}"
     
-    if ssh remote-archer "test -f '$SPECIFIC_DIR/specific.txt'"; then
+    if ssh $TEST_REMOTE "test -f '$SPECIFIC_DIR/specific.txt'"; then
         echo -e "${GREEN}✓ specific.txt synced to correct location${NC}"
     else
         echo -e "${RED}✗ specific.txt not found at expected location${NC}"
@@ -95,10 +104,10 @@ fi
 # Test 3: Pull-back functionality
 echo -e "\n${YELLOW}Test 3: Pull-back functionality (-p flag)${NC}"
 # Create a file on remote that doesn't exist locally
-ssh remote-archer "echo 'remote only file' > '$LOCAL_DIR/remote_only.txt'"
+ssh $TEST_REMOTE "echo 'remote only file' > '$LOCAL_DIR/remote_only.txt'"
 
 cd "$LOCAL_DIR"
-if "$INSTALL_DIR/bin/twin" -p remote-archer; then
+if "$INSTALL_DIR/bin/twin" -p $TEST_REMOTE; then
     echo -e "${GREEN}✓ Pull-back sync executed${NC}"
     
     if [ -f "remote_only.txt" ]; then
@@ -114,11 +123,11 @@ fi
 echo -e "\n${YELLOW}Test 4: Custom rsync flags (-e flag)${NC}"
 # Create a file to be deleted
 echo "to be deleted" > "$LOCAL_DIR/delete_me.txt"
-"$INSTALL_DIR/bin/twin" remote-archer "$LOCAL_DIR" > /dev/null 2>&1
+"$INSTALL_DIR/bin/twin" $TEST_REMOTE "$LOCAL_DIR" > /dev/null 2>&1
 
 # Now delete locally and sync with --delete flag
 rm "$LOCAL_DIR/delete_me.txt"
-if "$INSTALL_DIR/bin/twin" -e "-av --delete" remote-archer "$LOCAL_DIR" 2>&1 | grep -q "deleting"; then
+if "$INSTALL_DIR/bin/twin" -e "-av --delete" $TEST_REMOTE "$LOCAL_DIR" 2>&1 | grep -q "deleting"; then
     echo -e "${GREEN}✓ Custom flags (--delete) working${NC}"
 else
     echo -e "${YELLOW}! Could not verify --delete flag (may need verbose output)${NC}"
@@ -139,18 +148,18 @@ mkdir -p "$DEEP_TEST_DIR"
 echo "deep test content" > "$DEEP_TEST_DIR/deep.txt"
 
 # First remove the remote directory to ensure it doesn't exist
-ssh remote-archer "rm -rf '$TEST_DIR/deep'" 2>/dev/null || true
+ssh $TEST_REMOTE "rm -rf '$TEST_DIR/deep'" 2>/dev/null || true
 
-if "$INSTALL_DIR/bin/twin" remote-archer "$DEEP_TEST_DIR"; then
+if "$INSTALL_DIR/bin/twin" $TEST_REMOTE "$DEEP_TEST_DIR"; then
     echo -e "${GREEN}✓ Deep directory sync executed${NC}"
     
-    if ssh remote-archer "test -d '$DEEP_TEST_DIR'"; then
+    if ssh $TEST_REMOTE "test -d '$DEEP_TEST_DIR'"; then
         echo -e "${GREEN}✓ Remote directory structure created${NC}"
     else
         echo -e "${RED}✗ Remote directory structure not created${NC}"
     fi
     
-    if ssh remote-archer "test -f '$DEEP_TEST_DIR/deep.txt'"; then
+    if ssh $TEST_REMOTE "test -f '$DEEP_TEST_DIR/deep.txt'"; then
         echo -e "${GREEN}✓ File synced to deep directory${NC}"
     else
         echo -e "${RED}✗ File not synced to deep directory${NC}"
@@ -169,7 +178,7 @@ else
 fi
 
 # Invalid directory
-if ! "$INSTALL_DIR/bin/twin" remote-archer "/non/existent/path" 2>&1 | grep -q "does not exist"; then
+if ! "$INSTALL_DIR/bin/twin" $TEST_REMOTE "/non/existent/path" 2>&1 | grep -q "does not exist"; then
     echo -e "${RED}✗ Invalid directory error not caught${NC}"
 else
     echo -e "${GREEN}✓ Invalid directory error caught${NC}"
