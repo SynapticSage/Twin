@@ -1,6 +1,11 @@
+<div align="center">
+  <img src="logo.png" alt="Twin Logo" width="200">
+</div>
+
 # Twin - Simple rsync wrapper
 
-A lightweight tool for syncing directories to remote hosts using rsync.
+A lightweight convenience tool for pairing directories across remote hosts via rsync.
+
 
 ## Installation
 
@@ -98,13 +103,13 @@ Host myserver
     Port 22
     IdentityFile ~/.ssh/id_rsa
 
-Host remote-archer
-    HostName archer.example.com
+Host X
+    HostName X.example.com
     User deploy
     Port 2222
 ```
 
-Then use: `twin myserver` or `twin remote-archer`
+Then use: `twin myserver` or `twin X`
 
 ## Uninstallation
 
