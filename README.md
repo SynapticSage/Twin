@@ -18,8 +18,8 @@ make install PREFIX=~/bin # Install to custom location
 
 ```bash
 # Basic sync (push only)
-twin ssh-remote-name
-twin ssh-remote-name /path/to/directory
+twin ssh-remote-name              # Syncs current dir to same path on remote
+twin ssh-remote-name /path/to/dir # Syncs to remote:/path/to/dir
 
 # Bidirectional sync (push then pull)
 twin -p ssh-remote-name
