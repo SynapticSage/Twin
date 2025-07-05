@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+
+"""
+twin-config - Configuration manager for twin tool
+Handles reading and writing JSON config files for directory pairings
+"""
+
+import sys
+import os
+import json
+from datetime import datetime
+import argparse
+
+def get_config_filename(remote):
+    """Generate config filename for a given remote"""
+    return f".twin.{remote}.json"
+
+def read_config(remote, directory=None):
+    """Read configuration for a remote from the current or specified directory"""
+    if directory:
+        config_path = os.path.join(directory, get_config_filename(remote))
+    else:
+        config_path = get_config_filename(remote)
+    
+    if not os.path.exists(config_path):
+        return None
+    
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error reading config: {e}", file=sys.stderr)
+        return None
+
+def write_config(remote, remote_path=None, rsync_flags=None, directory=None):
+    """Write or update configuration for a remote"""
+    if directory:
+        config_path = os.path.join(directory, get_config_filename(remote))
+    else:
+        config_path = get_config_filename(remote)
+    
+    # Read existing config or create new
+    config = read_config(remote, directory) or {}
+    
+    # Update fields if provided
+    if remote_path is not None:
+        config['remote_path'] = remote_path
+    
+    if rsync_flags is not None:
+        config['rsync_flags'] = rsync_flags
+    
+    # Always update last_sync timestamp
+    config['last_sync'] = datetime.now().isoformat()
+    
+    try:
+        with open(config_path, 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error writing config: {e}", file=sys.stderr)
+        return False
+
+def main():
+    parser = argparse.ArgumentParser(description='Twin configuration manager')
+    parser.add_argument('action', choices=['read', 'write'], help='Action to perform')
+    parser.add_argument('remote', help='Remote name')
+    parser.add_argument('--remote-path', help='Remote path for write action')
+    parser.add_argument('--rsync-flags', help='Rsync flags for write action')
+    parser.add_argument('--directory', help='Directory to operate in')
+    parser.add_argument('--field', help='Specific field to read')
+    
+    args = parser.parse_args()
+    
+    if args.action == 'read':
+        config = read_config(args.remote, args.directory)
+        if config:
+            if args.field:
+                # Return specific field
+                value = config.get(args.field, '')
+                print(value if value else '')
+            else:
+                # Return all as JSON
+                print(json.dumps(config, indent=2))
+        else:
+            sys.exit(1)
+    
+    elif args.action == 'write':
+        success = write_config(
+            args.remote,
+            remote_path=args.remote_path,
+            rsync_flags=args.rsync_flags,
+            directory=args.directory
+        )
+        sys.exit(0 if success else 1)
+
+if __name__ == '__main__':
+    main()

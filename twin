@@ -14,13 +14,15 @@ RSYNC_FLAGS="-avu --progress"
 PULL_BACK=false
 SSH_REMOTE=""
 DIRECTORY=""
+REMOTE_PATH=""
+CONFIG_DIR="$(dirname "$0")"
 
 # Function to display help
 show_help() {
     cat << EOF
 twin - Simple rsync wrapper for syncing directories to remote hosts
 
-Usage: twin [options] ssh-remote-name [directory]
+Usage: twin [options] ssh-remote-name [remote-path]
 
 Options:
   -p          Pull back changes after push (bidirectional sync)
@@ -28,10 +30,10 @@ Options:
   -h          Show this help message
 
 Examples:
-  twin myserver                    # Sync current directory to myserver
-  twin myserver /path/to/dir       # Sync specific directory to myserver
+  twin myserver                    # Sync to saved path or same path on remote
+  twin myserver /remote/path       # Set up pairing to specific remote path
   twin -p myserver                 # Push then pull back changes
-  twin -e "-av --delete" myserver  # Use custom rsync flags
+  twin -e "-av --delete" myserver  # Use custom rsync flags (saved for future use)
 
 EOF
     exit 0
@@ -45,6 +47,7 @@ while getopts "pe:h" opt; do
             ;;
         e)
             RSYNC_FLAGS="$OPTARG"
+            RSYNC_FLAGS_SET=true
             ;;
         h)
             show_help
@@ -70,21 +73,33 @@ fi
 SSH_REMOTE="$1"
 shift
 
-# Get directory (optional)
+# Get current directory
+DIRECTORY="$(pwd)"
+
+# Get remote path (optional)
 if [ $# -gt 0 ]; then
-    DIRECTORY="$1"
+    REMOTE_PATH="$1"
+    # Save the remote path to config
+    "$CONFIG_DIR/twin-config" write "$SSH_REMOTE" --remote-path "$REMOTE_PATH" --rsync-flags "$RSYNC_FLAGS"
 else
-    DIRECTORY="$(pwd)"
+    # Try to read from config
+    SAVED_REMOTE_PATH=$("$CONFIG_DIR/twin-config" read "$SSH_REMOTE" --field remote_path 2>/dev/null || echo "")
+    SAVED_RSYNC_FLAGS=$("$CONFIG_DIR/twin-config" read "$SSH_REMOTE" --field rsync_flags 2>/dev/null || echo "")
+    
+    if [ -n "$SAVED_REMOTE_PATH" ]; then
+        REMOTE_PATH="$SAVED_REMOTE_PATH"
+        echo "Using saved remote path: $REMOTE_PATH"
+    else
+        # Default to same path as local
+        REMOTE_PATH="$DIRECTORY"
+    fi
+    
+    # Use saved rsync flags if no -e option was provided
+    if [ -z "$RSYNC_FLAGS_SET" ] && [ -n "$SAVED_RSYNC_FLAGS" ]; then
+        RSYNC_FLAGS="$SAVED_RSYNC_FLAGS"
+        echo "Using saved rsync flags: $RSYNC_FLAGS"
+    fi
 fi
-
-# Validate directory exists
-if [ ! -d "$DIRECTORY" ]; then
-    echo "Error: Directory '$DIRECTORY' does not exist" >&2
-    exit 1
-fi
-
-# Get absolute path
-DIRECTORY="$(cd "$DIRECTORY" && pwd)"
 
 # Ensure directory ends with /
 if [[ ! "$DIRECTORY" =~ /$ ]]; then
@@ -101,17 +116,22 @@ fi
 
 # Create remote directory if it doesn't exist
 # Remove trailing slash for directory creation
-REMOTE_DIR="${DIRECTORY%/}"
+REMOTE_DIR="${REMOTE_PATH%/}"
 echo "Ensuring remote directory exists: $REMOTE_DIR"
 if ! ssh "$SSH_REMOTE" "mkdir -p '$REMOTE_DIR'"; then
     echo "Error: Failed to create remote directory '$REMOTE_DIR'" >&2
     exit 1
 fi
 
+# Update config with latest sync info
+"$CONFIG_DIR/twin-config" write "$SSH_REMOTE" --rsync-flags "$RSYNC_FLAGS" >/dev/null 2>&1
+
 # Perform the sync (push)
-echo "Syncing $DIRECTORY to $SSH_REMOTE:$DIRECTORY"
+echo "Syncing $DIRECTORY to $SSH_REMOTE:$REMOTE_PATH"
 echo "Using rsync flags: $RSYNC_FLAGS"
-if ! rsync $RSYNC_FLAGS "$DIRECTORY" "$SSH_REMOTE:$DIRECTORY"; then
+# Build rsync command properly
+RSYNC_CMD="rsync $RSYNC_FLAGS \"$DIRECTORY/\" \"$SSH_REMOTE:$REMOTE_PATH/\""
+if ! eval "$RSYNC_CMD"; then
     echo "Error: rsync push failed" >&2
     exit 1
 fi
@@ -119,14 +139,10 @@ fi
 # Pull back if requested
 if [ "$PULL_BACK" = true ]; then
     echo ""
-    echo "Pulling back changes from $SSH_REMOTE:$DIRECTORY"
-    # Ensure local parent directory exists for pull-back
-    LOCAL_PARENT=$(dirname "$REMOTE_DIR")
-    if [ ! -d "$LOCAL_PARENT" ] && [ "$LOCAL_PARENT" != "/" ]; then
-        echo "Creating local parent directory: $LOCAL_PARENT"
-        mkdir -p "$LOCAL_PARENT"
-    fi
-    if ! rsync $RSYNC_FLAGS "$SSH_REMOTE:$DIRECTORY" "$DIRECTORY"; then
+    echo "Pulling back changes from $SSH_REMOTE:$REMOTE_PATH"
+    # Build rsync command properly
+    RSYNC_CMD="rsync $RSYNC_FLAGS \"$SSH_REMOTE:$REMOTE_PATH/\" \"$DIRECTORY/\""
+    if ! eval "$RSYNC_CMD"; then
         echo "Error: rsync pull failed" >&2
         exit 1
     fi

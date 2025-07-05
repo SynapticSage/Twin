@@ -17,19 +17,41 @@ make install PREFIX=~/bin # Install to custom location
 ## Usage
 
 ```bash
-# Basic sync (push only)
-twin ssh-remote-name              # Syncs current dir to same path on remote
-twin ssh-remote-name /path/to/dir # Syncs to remote:/path/to/dir
+# Initial pairing (sets remote target path)
+twin myserver /var/www/myapp      # Pairs current dir to remote:/var/www/myapp
 
-# Bidirectional sync (push then pull)
-twin -p ssh-remote-name
+# Subsequent syncs (uses saved pairing)
+twin myserver                      # Syncs to saved remote path
+twin -p myserver                   # Bidirectional sync with saved path
 
-# Custom rsync flags
-twin -e "-av --delete" ssh-remote-name
+# Custom rsync flags (saved for future use)
+twin -e "-av --dry-run" myserver   # Test what would happen
+twin -e "-av --delete" myserver    # CAUTION: Deletes files not in source
+
+# Exclude patterns (use = syntax to avoid quoting issues)
+twin -e '-avu --exclude=.venv/' myserver                    # Exclude .venv directory
+twin -e '-avu --exclude=*.pyc --exclude=__pycache__/' myserver  # Exclude Python cache
+twin -e '-avu --progress --exclude=node_modules/' myserver  # Show progress, exclude node_modules
+twin -e '-avu --exclude=venv_py311/ --exclude=.venv/' myserver  # Multiple excludes
+
+# First time usage (no pairing)
+twin myserver                      # Syncs to same path on remote (default)
 
 # Show help
 twin -h
 ```
+
+### Configuration Files
+
+Twin saves your directory pairings in `.twin.{remote}.json` files:
+- Remote path is remembered after first use
+- Custom rsync flags are saved when using `-e`
+- Each directory can have different pairings for different remotes
+- Config files are git-ignored by default
+
+Example: After running `twin prod /var/www/site` in `/Users/me/project`:
+- Creates `.twin.prod.json` with the pairing
+- Future `twin prod` commands will sync to `/var/www/site`
 
 ## Testing
 
@@ -83,14 +105,33 @@ Requires SSH access to the configured test remote. Tests real rsync operations:
 - Directory sync
 - Pull-back functionality
 - Custom rsync flags
+- Remote directory creation
 
+#### Configuration Tests
+```bash
+./test_config.sh
+```
+
+Tests configuration file functionality:
+- Config file creation
+- Saved paths and flags
+- Multiple directory pairings
+
+
+## Features
+
+- **Smart Pairing**: Remember remote paths for each directory
+- **Configuration Memory**: Save custom rsync flags per remote
+- **Bidirectional Sync**: Push and pull with `-p` flag
+- **Auto Directory Creation**: Creates remote directories as needed
+- **Per-Directory Settings**: Each directory can sync to different remote paths
 
 ## Requirements
 
 - bash
 - rsync
+- python3 (for configuration management)
 - SSH access to remote hosts
-- Remote hosts must have the same directory structure
 
 ## SSH Configuration
 

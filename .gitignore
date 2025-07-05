@@ -1,6 +1,9 @@
 # Environment files
 .env
 
+# Twin configuration files
+.twin.*.json
+
 # Backup files
 *.bak
 *~

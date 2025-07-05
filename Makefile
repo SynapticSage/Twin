@@ -21,14 +21,15 @@ help:
 install:
 	@echo "Installing twin to $(BINDIR)..."
 	@mkdir -p $(BINDIR)
-	@chmod +x twin
+	@chmod +x twin twin-config
 	@cp twin $(BINDIR)/twin
+	@cp twin-config $(BINDIR)/twin-config
 	@echo "Installation complete! twin is now available at $(BINDIR)/twin"
 	@echo "Make sure $(BINDIR) is in your PATH."
 
 uninstall:
 	@echo "Removing twin from $(BINDIR)..."
-	@rm -f $(BINDIR)/twin
+	@rm -f $(BINDIR)/twin $(BINDIR)/twin-config
 	@echo "Uninstall complete!"
 
 clean:
