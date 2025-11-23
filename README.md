@@ -2,10 +2,30 @@
   <img src="logo.png" alt="Twin Logo" width="200">
 </div>
 
-# Twin - Simple rsync wrapper
+# Twin - Painlessly pair directories across machines
 
-A lightweight convenience tool for pairing directories across remote hosts via rsync.
+> Have you ever wanted to painlessly pair up one directory on two machines? Twin is a lightweight convenience tool for pairing directories across remote hosts via rsync and git. It's a one-off command to pair-up folders.
 
+## Quick Start
+
+```bash
+# 1. Pair your local directory with a remote path
+twin myserver /var/www/myapp
+
+# 2. Make changes locally, then sync
+twin myserver
+
+# 3. Pull changes from remote
+twin -p myserver
+```
+
+That's it. Twin remembers the pairing and your preferences.
+
+## What is Twin?
+
+Twin solves a common developer problem: keeping directories synchronized across machines without the overhead of version control or cloud services. You run one command to pair a local directory with a remote path, and Twin remembers everything - the remote path, your rsync preferences, even git remote setup if both directories are repositories.
+
+Unlike raw rsync, you don't re-type paths and flags every time. Unlike git alone, large binary files sync efficiently. Twin gives you the best of both worlds.
 
 ## Installation
 
@@ -14,262 +34,83 @@ make install              # Install to /usr/local/bin
 make install PREFIX=~/bin # Install to custom location
 ```
 
-## Usage
+Requirements: bash, rsync, python3, SSH access to remote hosts
+
+## How It Works
+
+**Pairing**: The first time you sync to a remote, Twin saves the pairing:
+```bash
+twin myserver /var/www/myapp  # Creates .twin.myserver.json
+```
+
+**Persistence**: Future syncs use the saved path and flags:
+```bash
+twin myserver  # Syncs to /var/www/myapp automatically
+```
+
+**Git Integration**: If both directories are git repos, Twin offers to set them up as git remotes bidirectionally. You can sync files with rsync and commits with git.
+
+## Basic Usage
+
+### Sync Modes
 
 ```bash
-# Initial pairing (sets remote target path)
-twin myserver /var/www/myapp      # Pairs current dir to remote:/var/www/myapp
-
-# Subsequent syncs (uses saved pairing)
-twin myserver                      # Syncs to saved remote path (push only)
-twin -p myserver                   # Bidirectional sync (push then pull)
-twin -P myserver                   # Pull only - sync from remote to local
-
-# Custom rsync flags (saved for future use)
-twin -e "-av --dry-run" myserver   # Test what would happen
-twin -e "-av --delete" myserver    # CAUTION: Deletes files not in source
-
-# Exclude patterns (use = syntax to avoid quoting issues)
-twin -e '-avu --exclude=.venv/' myserver                    # Exclude .venv directory
-twin -e '-avu --exclude=*.pyc --exclude=__pycache__/' myserver  # Exclude Python cache
-twin -e '-avu --progress --exclude=node_modules/' myserver  # Show progress, exclude node_modules
-twin -e '-avu --exclude=venv_py311/ --exclude=.venv/' myserver  # Multiple excludes
-
-# First time usage (no pairing)
-twin myserver                      # Syncs to same path on remote (default)
-
-# Show help
-twin -h
+twin myserver              # Push: local → remote
+twin -p myserver           # Push then pull: bidirectional sync
+twin -P myserver           # Pull only: remote → local
 ```
 
-### Configuration Files
+### First-Time Pairing
 
-Twin saves your directory pairings in `.twin.{remote}.json` files:
-- Remote path is remembered after first use
-- Custom rsync flags are saved when using `-e`
-- Each directory can have different pairings for different remotes
-- Config files are git-ignored by default
-
-Example: After running `twin prod /var/www/site` in `/Users/me/project`:
-- Creates `.twin.prod.json` with the pairing
-- Future `twin prod` commands will sync to `/var/www/site`
-
-## Testing
-
-### Test Configuration
-
-Before running tests, configure your test environment:
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` and set your test remote:
-   ```bash
-   # SSH remote name for running tests (must be configured in ~/.ssh/config)
-   TWIN_TEST_REMOTE=your-test-server
-   ```
-
-   Alternatively, set the environment variable directly:
-   ```bash
-   export TWIN_TEST_REMOTE=your-test-server
-   ```
-
-3. Ensure you have SSH access to the test remote:
-   ```bash
-   ssh your-test-server exit  # Should connect without password
-   ```
-
-### Test Suites
-
-The project includes two test suites:
-
-#### Unit Tests
-```bash
-make test
-```
-
-Tests basic functionality including:
-- Installation/uninstallation
-- Argument parsing
-- Error handling
-- Flag combinations
-
-#### Integration Tests
-```bash
-make test-integration
-```
-
-Requires SSH access to the configured test remote. Tests real rsync operations:
-- Basic file synchronization
-- Directory sync
-- Pull-back functionality
-- Custom rsync flags
-- Remote directory creation
-
-#### Configuration Tests
-```bash
-./test_config.sh
-```
-
-Tests configuration file functionality:
-- Config file creation
-- Saved paths and flags
-- Multiple directory pairings
-
-#### Git Integration Tests
-```bash
-./test_git.sh
-```
-
-Tests git integration functionality:
-- Git repository detection
-- Remote setup and configuration
-- Conflict handling
-- SSH config parsing
-- Non-git directory handling
-- Config persistence
-
-
-## Features
-
-- **Smart Pairing**: Remember remote paths for each directory
-- **Configuration Memory**: Save custom rsync flags per remote
-- **Bidirectional Sync**: Push and pull with `-p` flag
-- **Auto Directory Creation**: Creates remote directories as needed
-- **Per-Directory Settings**: Each directory can sync to different remote paths
-- **Git Integration**: Automatically link git repositories as remotes
-
-## Git Integration
-
-Twin can automatically set up git remotes between your local and remote directories when both are git repositories. This makes it easy to sync files with rsync while also being able to push/pull git commits between the machines.
-
-### How It Works
-
-When you pair a local git repository with a remote git repository (during initial pairing), Twin will:
-
-1. Detect that both directories are git repositories
-2. Prompt you for remote names (or use defaults)
-3. Add each repository as a git remote on the other machine
-4. Save the configuration for future syncs
-
-### Basic Usage
-
-```bash
-# Initial pairing with git repos - Twin will detect and offer to link them
-cd ~/my-project  # Local git repo
-twin myserver /remote/project  # Remote is also a git repo
-# Twin prompts you to set up git remotes
-
-# Subsequent syncs - git remotes already configured
-twin myserver  # Just syncs files, git remotes stay configured
-```
-
-### Git Flags
-
-```bash
-# Force git remote setup (even if already paired)
-twin -g myserver
-
-# Skip git remote setup
-twin -G myserver
-
-# Custom remote names
-twin --git-local-name laptop myserver
-twin --git-remote-name desktop myserver
-
-# Use SSH config hostnames for remote names
-twin --git-ssh-config myserver
-
-# Combine flags
-twin -g --git-local-name dev-laptop --git-remote-name prod-server myserver
-```
-
-### Interactive Prompts
-
-If you don't provide remote names via flags, Twin will interactively ask you how to name the remotes:
-
-```
-Git repositories detected! Setting up git remotes.
-
-Choose how to name the remote on the local machine:
-  1) Use default name: target
-  2) Enter custom name
-  3) Use SSH config hostname: myserver.example.com
-
-Choice (1-3) [1]:
-```
-
-### Remote Name Conflicts
-
-If a git remote with the chosen name already exists, Twin will:
-1. Detect the conflict
-2. Ask you for an alternate name
-3. Skip git setup if you press Enter without providing a name
-
-```
-Warning: Git remote 'target' already exists on local machine.
-Enter alternate name (or press Enter to skip git remote setup):
-```
-
-### URL Formats
-
-Twin intelligently chooses the git remote URL format:
-- **SSH URLs** for remote machines: `myserver:/path/to/repo`
-- **File paths** for same machine: `/path/to/repo`
-
-### Default Remote Names
-
-If you don't specify custom names:
-- **Local machine** gets remote named: `target`
-- **Remote machine** gets remote named: `source`
-
-This means:
 ```bash
 cd ~/my-project
+twin myserver /remote/path  # Sets up pairing, syncs files
+```
+
+### Custom Rsync Flags
+
+```bash
+# Flags are saved for future syncs
+twin -e "-av --delete" myserver           # Delete extra files on remote
+twin -e "-avu --progress" myserver        # Show detailed progress
+```
+
+### Common Exclusions
+
+```bash
+twin -e '--exclude=node_modules/ --exclude=.venv/' myserver
+twin -e '--exclude=*.pyc --exclude=__pycache__/' myserver
+```
+
+### Git Repository Pairing
+
+When both directories are git repos, Twin prompts to link them:
+
+```bash
 twin myserver /remote/project
-
-# Local repo now has remote 'target' -> myserver:/remote/project
-# Remote repo now has remote 'source' -> youruser@yourmachine:~/my-project
+# Twin detects git repos and offers to set up remotes
+# After setup: git push target main, git pull target main
 ```
 
-### Using SSH Config Hostnames
+Use `-g` to force git setup, `-G` to skip it.
 
-With the `--git-ssh-config` flag, Twin will parse your `~/.ssh/config` to use meaningful names:
+## Command Reference
 
-```bash
-# In ~/.ssh/config:
-# Host prod-server
-#   HostName server.example.com
+| Flag | Description |
+|------|-------------|
+| `-p` | Bidirectional sync (push then pull) |
+| `-P` | Pull only (remote to local) |
+| `-e FLAGS` | Custom rsync flags (saved for future use) |
+| `-g` | Force git remote setup |
+| `-G` | Skip git remote setup |
+| `--git-local-name NAME` | Custom git remote name on local machine |
+| `--git-remote-name NAME` | Custom git remote name on remote machine |
+| `--git-ssh-config` | Use SSH config hostnames for git remotes |
+| `-h` | Show help |
 
-twin --git-ssh-config prod-server
+## Configuration
 
-# Local remote named: prod-server
-# Remote remote named: yourhostname
-```
-
-### Working with Git After Setup
-
-Once git remotes are configured:
-
-```bash
-# On local machine
-git fetch target           # Fetch from remote
-git pull target main       # Pull remote changes
-git push target main       # Push to remote
-
-# On remote machine (via SSH)
-ssh myserver
-cd /remote/project
-git fetch source          # Fetch from your local machine
-git pull source main      # Pull local changes
-git push source main      # Push to your local machine
-```
-
-### Configuration Storage
-
-Git integration settings are stored in `.twin.{remote}.json`:
+Twin stores pairings in `.twin.{remote}.json` files in each directory:
 
 ```json
 {
@@ -284,64 +125,64 @@ Git integration settings are stored in `.twin.{remote}.json`:
 }
 ```
 
-### Non-Git Directories
+Config files are automatically git-ignored.
 
-Twin gracefully handles non-git directories:
-- If neither directory is a git repo: Syncs files normally, no git setup attempted
-- If only one is a git repo: Syncs files normally, no git setup attempted
-- No errors or warnings if git is not relevant
+## SSH Setup
 
-### Examples
-
-```bash
-# Example 1: Accept defaults
-twin myserver /remote/project
-# Choose option 1 for both prompts -> uses 'target' and 'source'
-
-# Example 2: Custom names
-twin --git-local-name laptop --git-remote-name server myserver /remote/project
-# No prompts, uses your custom names
-
-# Example 3: Use SSH config
-twin --git-ssh-config prod /remote/project
-# Uses hostname from ~/.ssh/config
-
-# Example 4: Skip git integration
-twin -G myserver /remote/project
-# Sets up file sync only, no git remotes
-
-# Example 5: Force git setup later
-twin -g myserver  # Runs git setup even though already paired
-```
-
-## Requirements
-
-- bash
-- rsync
-- python3 (for configuration management)
-- SSH access to remote hosts
-
-## SSH Configuration
-
-Twin uses SSH host aliases from your `~/.ssh/config` file. Example configuration:
+Twin uses SSH host aliases from `~/.ssh/config`:
 
 ```
 Host myserver
     HostName example.com
-    User myusername
-    Port 22
-    IdentityFile ~/.ssh/id_rsa
-
-Host X
-    HostName X.example.com
     User deploy
-    Port 2222
+    IdentityFile ~/.ssh/id_rsa
 ```
 
-Then use: `twin myserver` or `twin X`
+Then use: `twin myserver`
+
+See [docs/ssh-setup.md](docs/ssh-setup.md) for detailed SSH configuration.
+
+## Documentation
+
+- **[Advanced Usage](docs/advanced-usage.md)** - Complex rsync patterns, multiple remotes, workflow examples
+- **[Git Integration Guide](docs/git-integration.md)** - Complete git integration documentation
+- **[SSH Setup](docs/ssh-setup.md)** - SSH configuration, key management, troubleshooting
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[Contributing](CONTRIBUTING.md)** - Development setup, running tests
+
+## Common Workflows
+
+**Development on local, deploy to server:**
+```bash
+# Initial setup
+twin prod /var/www/myapp
+
+# Daily workflow
+# ... make changes ...
+twin prod              # Deploy to production
+```
+
+**Working across laptop and desktop:**
+```bash
+# On laptop
+twin desktop ~/projects/myapp
+
+# On desktop (after laptop sync)
+twin -P laptop  # Pull changes from laptop
+```
+
+**Managing binary assets with git code:**
+```bash
+twin -e '--exclude=*.git/' myserver  # Sync everything except .git
+# Then use git push/pull for code history
+```
 
 ## Uninstallation
 
 ```bash
 make uninstall
 ```
+
+## License
+
+MIT
