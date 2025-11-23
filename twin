@@ -12,10 +12,213 @@ set -e
 # Default values
 RSYNC_FLAGS="-avu --progress"
 PULL_BACK=false
+PULL_ONLY=false
 SSH_REMOTE=""
 DIRECTORY=""
 REMOTE_PATH=""
 CONFIG_DIR="$(dirname "$0")"
+GIT_LINK=false
+GIT_NO_LINK=false
+GIT_LOCAL_NAME=""
+GIT_REMOTE_NAME=""
+GIT_SSH_CONFIG=false
+
+# Git detection functions
+is_git_repo() {
+    local dir="$1"
+    [ -d "$dir/.git" ]
+}
+
+check_remote_git_repo() {
+    local remote="$1"
+    local path="$2"
+    ssh "$remote" "[ -d '$path/.git' ]" 2>/dev/null
+}
+
+parse_ssh_config_hostname() {
+    local ssh_remote="$1"
+    local hostname=""
+
+    # Try to get HostName from SSH config
+    if [ -f ~/.ssh/config ]; then
+        hostname=$(awk -v host="$ssh_remote" '
+            BEGIN { IGNORECASE=1 }
+            /^Host[[:space:]]/ {
+                if ($2 == host) found=1
+                else found=0
+            }
+            found && /^[[:space:]]*HostName[[:space:]]/ {
+                print $2
+                exit
+            }
+        ' ~/.ssh/config)
+    fi
+
+    echo "$hostname"
+}
+
+get_local_hostname() {
+    hostname -s 2>/dev/null || hostname 2>/dev/null || echo "local"
+}
+
+check_git_remote_exists() {
+    local repo_dir="$1"
+    local remote_name="$2"
+
+    if ! is_git_repo "$repo_dir"; then
+        return 1
+    fi
+
+    (cd "$repo_dir" && git remote | grep -q "^${remote_name}$")
+}
+
+prompt_for_remote_name() {
+    local default_name="$1"
+    local location="$2"  # "local" or "remote"
+    local ssh_remote="$3"
+
+    echo ""
+    echo "Git repositories detected! Setting up git remotes."
+    echo ""
+    echo "Choose how to name the remote on the $location machine:"
+    echo "  1) Use default name: $default_name"
+    echo "  2) Enter custom name"
+
+    if [ "$location" = "local" ]; then
+        local ssh_hostname=$(parse_ssh_config_hostname "$ssh_remote")
+        if [ -n "$ssh_hostname" ]; then
+            echo "  3) Use SSH config hostname: $ssh_hostname"
+        fi
+    else
+        local local_hostname=$(get_local_hostname)
+        echo "  3) Use local hostname: $local_hostname"
+    fi
+
+    echo ""
+    read -p "Choice (1-3) [1]: " choice
+    choice=${choice:-1}
+
+    case $choice in
+        1)
+            echo "$default_name"
+            ;;
+        2)
+            read -p "Enter custom remote name: " custom_name
+            if [ -z "$custom_name" ]; then
+                echo "$default_name"
+            else
+                echo "$custom_name"
+            fi
+            ;;
+        3)
+            if [ "$location" = "local" ]; then
+                local ssh_hostname=$(parse_ssh_config_hostname "$ssh_remote")
+                if [ -n "$ssh_hostname" ]; then
+                    echo "$ssh_hostname"
+                else
+                    echo "$default_name"
+                fi
+            else
+                echo "$(get_local_hostname)"
+            fi
+            ;;
+        *)
+            echo "$default_name"
+            ;;
+    esac
+}
+
+handle_git_remote_conflict() {
+    local remote_name="$1"
+    local location="$2"
+
+    echo ""
+    echo "Warning: Git remote '$remote_name' already exists on $location machine."
+    read -p "Enter alternate name (or press Enter to skip git remote setup): " alt_name
+
+    echo "$alt_name"
+}
+
+setup_git_remotes() {
+    local ssh_remote="$1"
+    local local_dir="$2"
+    local remote_path="$3"
+    local local_remote_name="$4"
+    local remote_remote_name="$5"
+
+    # Check if both are git repos
+    if ! is_git_repo "$local_dir"; then
+        return 0
+    fi
+
+    if ! check_remote_git_repo "$ssh_remote" "$remote_path"; then
+        return 0
+    fi
+
+    echo ""
+    echo "Setting up git remotes..."
+
+    # Determine if on same machine
+    local same_machine=false
+    local remote_url=""
+    if ssh "$ssh_remote" "hostname" 2>/dev/null | grep -q "$(hostname)" 2>/dev/null; then
+        same_machine=true
+    fi
+
+    # Add remote on local machine
+    if check_git_remote_exists "$local_dir" "$local_remote_name"; then
+        local alt_name=$(handle_git_remote_conflict "$local_remote_name" "local")
+        if [ -z "$alt_name" ]; then
+            echo "Skipping git remote setup on local machine."
+        else
+            local_remote_name="$alt_name"
+        fi
+    fi
+
+    if [ -n "$local_remote_name" ]; then
+        if $same_machine; then
+            remote_url="$remote_path"
+        else
+            remote_url="${ssh_remote}:${remote_path}"
+        fi
+
+        if (cd "$local_dir" && git remote add "$local_remote_name" "$remote_url" 2>/dev/null); then
+            echo "✓ Added git remote '$local_remote_name' -> $remote_url"
+            "$CONFIG_DIR/twin-config" write "$ssh_remote" --git-local-name "$local_remote_name" >/dev/null 2>&1
+        else
+            echo "Warning: Failed to add git remote '$local_remote_name' on local machine" >&2
+        fi
+    fi
+
+    # Add remote on remote machine
+    if ssh "$ssh_remote" "cd '$remote_path' && git remote | grep -q '^${remote_remote_name}$'" 2>/dev/null; then
+        local alt_name=$(handle_git_remote_conflict "$remote_remote_name" "remote")
+        if [ -z "$alt_name" ]; then
+            echo "Skipping git remote setup on remote machine."
+            return 0
+        else
+            remote_remote_name="$alt_name"
+        fi
+    fi
+
+    if [ -n "$remote_remote_name" ]; then
+        if $same_machine; then
+            local local_url="$local_dir"
+        else
+            local local_url="$(whoami)@$(get_local_hostname):${local_dir}"
+        fi
+
+        if ssh "$ssh_remote" "cd '$remote_path' && git remote add '$remote_remote_name' '$local_url'" 2>/dev/null; then
+            echo "✓ Added git remote '$remote_remote_name' -> $local_url (on remote)"
+            "$CONFIG_DIR/twin-config" write "$ssh_remote" --git-remote-name "$remote_remote_name" >/dev/null 2>&1
+        else
+            echo "Warning: Failed to add git remote '$remote_remote_name' on remote machine" >&2
+        fi
+    fi
+
+    # Mark setup as complete
+    "$CONFIG_DIR/twin-config" write "$ssh_remote" --git-setup-complete true >/dev/null 2>&1
+}
 
 # Function to display help
 show_help() {
@@ -25,29 +228,87 @@ twin - Simple rsync wrapper for syncing directories to remote hosts
 Usage: twin [options] ssh-remote-name [remote-path]
 
 Options:
-  -p          Pull back changes after push (bidirectional sync)
-  -e FLAGS    Custom rsync flags (default: '-avu --progress')
-  -h          Show this help message
+  -p                    Pull back changes after push (bidirectional sync)
+  -P                    Pull only - sync from remote to local
+  -e FLAGS              Custom rsync flags (default: '-avu --progress')
+  -g                    Force git remote setup (even if already paired)
+  -G                    Skip git remote setup
+  --git-local-name N    Name for git remote on local machine (default: 'target')
+  --git-remote-name N   Name for git remote on remote machine (default: 'source')
+  --git-ssh-config      Derive remote names from ~/.ssh/config hostnames
+  -h                    Show this help message
 
 Examples:
   twin myserver                    # Sync to saved path or same path on remote
   twin myserver /remote/path       # Set up pairing to specific remote path
   twin -p myserver                 # Push then pull back changes
+  twin -P myserver                 # Pull only - sync from remote to local
   twin -e "-av --delete" myserver  # Use custom rsync flags (saved for future use)
+
+Git Integration Examples:
+  twin -g myserver                              # Force git remote setup
+  twin -G myserver                              # Skip git remote setup
+  twin --git-local-name laptop myserver         # Custom local remote name
+  twin --git-remote-name desktop myserver       # Custom remote remote name
+  twin --git-ssh-config myserver                # Use SSH config hostnames
 
 EOF
     exit 0
 }
 
+# Parse long options first
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --git-local-name)
+            GIT_LOCAL_NAME="$2"
+            shift 2
+            ;;
+        --git-remote-name)
+            GIT_REMOTE_NAME="$2"
+            shift 2
+            ;;
+        --git-ssh-config)
+            GIT_SSH_CONFIG=true
+            shift
+            ;;
+        --)
+            shift
+            ARGS+=("$@")
+            break
+            ;;
+        -*)
+            ARGS+=("$1")
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Reset positional parameters
+set -- "${ARGS[@]}"
+
 # Parse command line options
-while getopts "pe:h" opt; do
+while getopts "pPe:gGh" opt; do
     case $opt in
         p)
             PULL_BACK=true
             ;;
+        P)
+            PULL_ONLY=true
+            ;;
         e)
             RSYNC_FLAGS="$OPTARG"
             RSYNC_FLAGS_SET=true
+            ;;
+        g)
+            GIT_LINK=true
+            ;;
+        G)
+            GIT_NO_LINK=true
             ;;
         h)
             show_help
@@ -77,8 +338,10 @@ shift
 DIRECTORY="$(pwd)"
 
 # Get remote path (optional)
+INITIAL_PAIRING=false
 if [ $# -gt 0 ]; then
     REMOTE_PATH="$1"
+    INITIAL_PAIRING=true
     # Save the remote path to config
     "$CONFIG_DIR/twin-config" write "$SSH_REMOTE" --remote-path "$REMOTE_PATH" --rsync-flags "$RSYNC_FLAGS"
 else
@@ -126,25 +389,96 @@ fi
 # Update config with latest sync info
 "$CONFIG_DIR/twin-config" write "$SSH_REMOTE" --rsync-flags "$RSYNC_FLAGS" >/dev/null 2>&1
 
-# Perform the sync (push)
-echo "Syncing $DIRECTORY to $SSH_REMOTE:$REMOTE_PATH"
-echo "Using rsync flags: $RSYNC_FLAGS"
-# Build rsync command properly
-RSYNC_CMD="rsync $RSYNC_FLAGS \"$DIRECTORY/\" \"$SSH_REMOTE:$REMOTE_PATH/\""
-if ! eval "$RSYNC_CMD"; then
-    echo "Error: rsync push failed" >&2
-    exit 1
+# Git remote setup logic
+GIT_SETUP_COMPLETE=$("$CONFIG_DIR/twin-config" read "$SSH_REMOTE" --field git_integration.setup_complete 2>/dev/null || echo "false")
+
+# Determine if we should run git setup
+SHOULD_SETUP_GIT=false
+
+if [ "$GIT_NO_LINK" = true ]; then
+    # User explicitly skipped
+    SHOULD_SETUP_GIT=false
+elif [ "$GIT_LINK" = true ]; then
+    # User explicitly requested
+    SHOULD_SETUP_GIT=true
+elif [ "$INITIAL_PAIRING" = true ] && [ "$GIT_SETUP_COMPLETE" != "true" ]; then
+    # Initial pairing and not yet complete
+    SHOULD_SETUP_GIT=true
 fi
 
-# Pull back if requested
-if [ "$PULL_BACK" = true ]; then
-    echo ""
-    echo "Pulling back changes from $SSH_REMOTE:$REMOTE_PATH"
+if [ "$SHOULD_SETUP_GIT" = true ]; then
+    # Determine remote names
+    LOCAL_NAME="$GIT_LOCAL_NAME"
+    REMOTE_NAME="$GIT_REMOTE_NAME"
+
+    # If --git-ssh-config flag is set, derive names from SSH config
+    if [ "$GIT_SSH_CONFIG" = true ]; then
+        if [ -z "$LOCAL_NAME" ]; then
+            SSH_HOSTNAME=$(parse_ssh_config_hostname "$SSH_REMOTE")
+            if [ -n "$SSH_HOSTNAME" ]; then
+                LOCAL_NAME="$SSH_HOSTNAME"
+            fi
+        fi
+        if [ -z "$REMOTE_NAME" ]; then
+            REMOTE_NAME=$(get_local_hostname)
+        fi
+    fi
+
+    # If names still not set, prompt or use defaults
+    if [ -z "$LOCAL_NAME" ]; then
+        # Check if both are git repos before prompting
+        if is_git_repo "$DIRECTORY" && check_remote_git_repo "$SSH_REMOTE" "$REMOTE_PATH"; then
+            LOCAL_NAME=$(prompt_for_remote_name "target" "local" "$SSH_REMOTE")
+        else
+            LOCAL_NAME="target"
+        fi
+    fi
+
+    if [ -z "$REMOTE_NAME" ]; then
+        # Check if both are git repos before prompting
+        if is_git_repo "$DIRECTORY" && check_remote_git_repo "$SSH_REMOTE" "$REMOTE_PATH"; then
+            REMOTE_NAME=$(prompt_for_remote_name "source" "remote" "$SSH_REMOTE")
+        else
+            REMOTE_NAME="source"
+        fi
+    fi
+
+    # Run git remote setup
+    setup_git_remotes "$SSH_REMOTE" "$DIRECTORY" "$REMOTE_PATH" "$LOCAL_NAME" "$REMOTE_NAME"
+fi
+
+# Perform the sync
+if [ "$PULL_ONLY" = true ]; then
+    # Pull only mode
+    echo "Pulling from $SSH_REMOTE:$REMOTE_PATH to $DIRECTORY"
+    echo "Using rsync flags: $RSYNC_FLAGS"
     # Build rsync command properly
     RSYNC_CMD="rsync $RSYNC_FLAGS \"$SSH_REMOTE:$REMOTE_PATH/\" \"$DIRECTORY/\""
     if ! eval "$RSYNC_CMD"; then
         echo "Error: rsync pull failed" >&2
         exit 1
+    fi
+else
+    # Normal push mode
+    echo "Syncing $DIRECTORY to $SSH_REMOTE:$REMOTE_PATH"
+    echo "Using rsync flags: $RSYNC_FLAGS"
+    # Build rsync command properly
+    RSYNC_CMD="rsync $RSYNC_FLAGS \"$DIRECTORY/\" \"$SSH_REMOTE:$REMOTE_PATH/\""
+    if ! eval "$RSYNC_CMD"; then
+        echo "Error: rsync push failed" >&2
+        exit 1
+    fi
+    
+    # Pull back if requested
+    if [ "$PULL_BACK" = true ]; then
+        echo ""
+        echo "Pulling back changes from $SSH_REMOTE:$REMOTE_PATH"
+        # Build rsync command properly
+        RSYNC_CMD="rsync $RSYNC_FLAGS \"$SSH_REMOTE:$REMOTE_PATH/\" \"$DIRECTORY/\""
+        if ! eval "$RSYNC_CMD"; then
+            echo "Error: rsync pull failed" >&2
+            exit 1
+        fi
     fi
 fi
 

@@ -32,26 +32,41 @@ def read_config(remote, directory=None):
         print(f"Error reading config: {e}", file=sys.stderr)
         return None
 
-def write_config(remote, remote_path=None, rsync_flags=None, directory=None):
+def write_config(remote, remote_path=None, rsync_flags=None, directory=None,
+                 git_local_name=None, git_remote_name=None, git_setup_complete=None):
     """Write or update configuration for a remote"""
     if directory:
         config_path = os.path.join(directory, get_config_filename(remote))
     else:
         config_path = get_config_filename(remote)
-    
+
     # Read existing config or create new
     config = read_config(remote, directory) or {}
-    
+
     # Update fields if provided
     if remote_path is not None:
         config['remote_path'] = remote_path
-    
+
     if rsync_flags is not None:
         config['rsync_flags'] = rsync_flags
-    
+
+    # Handle git integration fields
+    if any([git_local_name, git_remote_name, git_setup_complete is not None]):
+        if 'git_integration' not in config:
+            config['git_integration'] = {}
+
+        if git_local_name is not None:
+            config['git_integration']['local_remote_name'] = git_local_name
+
+        if git_remote_name is not None:
+            config['git_integration']['remote_remote_name'] = git_remote_name
+
+        if git_setup_complete is not None:
+            config['git_integration']['setup_complete'] = git_setup_complete
+
     # Always update last_sync timestamp
     config['last_sync'] = datetime.now().isoformat()
-    
+
     try:
         with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
@@ -67,29 +82,41 @@ def main():
     parser.add_argument('--remote-path', help='Remote path for write action')
     parser.add_argument('--rsync-flags', help='Rsync flags for write action')
     parser.add_argument('--directory', help='Directory to operate in')
-    parser.add_argument('--field', help='Specific field to read')
-    
+    parser.add_argument('--field', help='Specific field to read (supports nested: git_integration.setup_complete)')
+    parser.add_argument('--git-local-name', help='Git remote name on local machine')
+    parser.add_argument('--git-remote-name', help='Git remote name on remote machine')
+    parser.add_argument('--git-setup-complete', type=lambda x: x.lower() == 'true', help='Git setup completion status (true/false)')
+
     args = parser.parse_args()
-    
+
     if args.action == 'read':
         config = read_config(args.remote, args.directory)
         if config:
             if args.field:
-                # Return specific field
-                value = config.get(args.field, '')
+                # Support nested field access (e.g., git_integration.setup_complete)
+                value = config
+                for key in args.field.split('.'):
+                    if isinstance(value, dict):
+                        value = value.get(key, '')
+                    else:
+                        value = ''
+                        break
                 print(value if value else '')
             else:
                 # Return all as JSON
                 print(json.dumps(config, indent=2))
         else:
             sys.exit(1)
-    
+
     elif args.action == 'write':
         success = write_config(
             args.remote,
             remote_path=args.remote_path,
             rsync_flags=args.rsync_flags,
-            directory=args.directory
+            directory=args.directory,
+            git_local_name=args.git_local_name,
+            git_remote_name=args.git_remote_name,
+            git_setup_complete=args.git_setup_complete
         )
         sys.exit(0 if success else 1)
 
