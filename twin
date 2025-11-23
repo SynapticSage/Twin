@@ -77,25 +77,26 @@ prompt_for_remote_name() {
     local location="$2"  # "local" or "remote"
     local ssh_remote="$3"
 
-    echo ""
-    echo "Git repositories detected! Setting up git remotes."
-    echo ""
-    echo "Choose how to name the remote on the $location machine:"
-    echo "  1) Use default name: $default_name"
-    echo "  2) Enter custom name"
+    # Output prompts to stderr so they're visible to user
+    echo "" >&2
+    echo "Git repositories detected! Setting up git remotes." >&2
+    echo "" >&2
+    echo "Choose how to name the remote on the $location machine:" >&2
+    echo "  1) Use default name: $default_name" >&2
+    echo "  2) Enter custom name" >&2
 
     if [ "$location" = "local" ]; then
         local ssh_hostname=$(parse_ssh_config_hostname "$ssh_remote")
         if [ -n "$ssh_hostname" ]; then
-            echo "  3) Use SSH config hostname: $ssh_hostname"
+            echo "  3) Use SSH config hostname: $ssh_hostname" >&2
         fi
     else
         local local_hostname=$(get_local_hostname)
-        echo "  3) Use local hostname: $local_hostname"
+        echo "  3) Use local hostname: $local_hostname" >&2
     fi
 
-    echo ""
-    read -p "Choice (1-3) [1]: " choice
+    echo "" >&2
+    read -p "Choice (1-3) [1]: " choice >&2
     choice=${choice:-1}
 
     case $choice in
@@ -103,7 +104,7 @@ prompt_for_remote_name() {
             echo "$default_name"
             ;;
         2)
-            read -p "Enter custom remote name: " custom_name
+            read -p "Enter custom remote name: " custom_name >&2
             if [ -z "$custom_name" ]; then
                 echo "$default_name"
             else
@@ -132,9 +133,10 @@ handle_git_remote_conflict() {
     local remote_name="$1"
     local location="$2"
 
-    echo ""
-    echo "Warning: Git remote '$remote_name' already exists on $location machine."
-    read -p "Enter alternate name (or press Enter to skip git remote setup): " alt_name
+    # Output prompts to stderr so they're visible to user
+    echo "" >&2
+    echo "Warning: Git remote '$remote_name' already exists on $location machine." >&2
+    read -p "Enter alternate name (or press Enter to skip git remote setup): " alt_name >&2
 
     echo "$alt_name"
 }
