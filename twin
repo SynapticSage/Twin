@@ -39,19 +39,12 @@ parse_ssh_config_hostname() {
     local ssh_remote="$1"
     local hostname=""
 
-    # Try to get HostName from SSH config
-    if [ -f ~/.ssh/config ]; then
-        hostname=$(awk -v host="$ssh_remote" '
-            BEGIN { IGNORECASE=1 }
-            /^Host[[:space:]]/ {
-                if ($2 == host) found=1
-                else found=0
-            }
-            found && /^[[:space:]]*HostName[[:space:]]/ {
-                print $2
-                exit
-            }
-        ' ~/.ssh/config)
+    # Use ssh -G to parse config (more reliable than awk)
+    hostname=$(ssh -G "$ssh_remote" 2>/dev/null | grep "^hostname " | awk '{print $2}')
+
+    # Fallback: if ssh -G failed, return the remote name itself
+    if [ -z "$hostname" ]; then
+        hostname="$ssh_remote"
     fi
 
     echo "$hostname"
@@ -87,9 +80,7 @@ prompt_for_remote_name() {
 
     if [ "$location" = "local" ]; then
         local ssh_hostname=$(parse_ssh_config_hostname "$ssh_remote")
-        if [ -n "$ssh_hostname" ]; then
-            echo "  3) Use SSH config hostname: $ssh_hostname" >&2
-        fi
+        echo "  3) Use SSH config hostname: $ssh_hostname" >&2
     else
         local local_hostname=$(get_local_hostname)
         echo "  3) Use local hostname: $local_hostname" >&2
